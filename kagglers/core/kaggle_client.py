@@ -45,7 +45,7 @@ def default_runner(cmd: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True, check=False)
 
 
-_RULES = re.compile(r"403|accept", re.I)
+_RULES = re.compile(r"\b403\b|accept.*rules|rules.*accept", re.I)
 _TRANSIENT = re.compile(r"\b(5\d\d|429)\b|timed? ?out|connection|temporar|unavailable", re.I)
 
 

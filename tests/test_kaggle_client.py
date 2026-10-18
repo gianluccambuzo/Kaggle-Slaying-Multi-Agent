@@ -75,3 +75,25 @@ def test_non_transient_error_raises_kaggle_error(tmp_path):
     r = Runner(_result(1, err="404 not found"))
     with pytest.raises(KaggleError):
         CliKaggleClient(runner=r, sleep=lambda s: None).leaderboard("c", tmp_path)
+
+
+def test_accept_encoding_in_503_is_transient_not_rules(tmp_path):
+    r = Runner(_result(1, err="503 Server Error\nAccept-Encoding: gzip\npath /tmp/x403y"))
+    c = CliKaggleClient(runner=r, max_retries=3, sleep=lambda s: None)
+    with pytest.raises(KaggleTransientError):
+        c.download("comp", tmp_path)
+    assert len(r.calls) == 3
+
+
+def test_403_forbidden_raises_rules_single_call(tmp_path):
+    r = Runner(_result(1, err="403 - Forbidden"))
+    with pytest.raises(KaggleRulesNotAccepted):
+        CliKaggleClient(runner=r, sleep=lambda s: None).download("comp", tmp_path)
+    assert len(r.calls) == 1
+
+
+def test_accept_competition_rules_raises_rules_single_call(tmp_path):
+    r = Runner(_result(1, err="You must accept the competition rules"))
+    with pytest.raises(KaggleRulesNotAccepted):
+        CliKaggleClient(runner=r, sleep=lambda s: None).download("comp", tmp_path)
+    assert len(r.calls) == 1
