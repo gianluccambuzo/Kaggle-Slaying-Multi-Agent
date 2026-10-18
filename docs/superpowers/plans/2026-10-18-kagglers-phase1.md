@@ -29,6 +29,7 @@
 - A tabela `runs` ganha a coluna `state` (necessária para retomar). A spec deve receber a mesma coluna (Task 2, Step 4).
 - Limite de memória do sandbox é imposto por **polling de RSS da árvore de processos via psutil** (não Job Objects/pywin32). Limite de CPU = teto de threads (`OMP_NUM_THREADS`/`n_jobs`).
 - A análise estática anti-leakage do sandbox fica para a fase 2, quando houver código gerado por LLM. O baseline é código nosso.
+- O sandbox da fase 1 não bloqueia rede nem monta os dados como somente leitura: só isola o ambiente (`python -I`, env mínimo, sem segredos), limita tempo/RSS e mata a árvore de processos. Bloqueio de rede e dados somente leitura ficam para quando houver código gerado por LLM.
 - Calibração do fator 2× de ruído, nested CV do ensemble e PROPOSE ficam para a fase 2 ou 3. A fase 1 só registra o `cv_std` e os scores por fold.
 - Os nomes das colunas do dataset ainda não foram confirmados. O pack lê `id_col` e `target_col` da 1ª e 2ª colunas de `sample_submission.csv`; `positive_label` é config explícita (ver Review Focus).
 

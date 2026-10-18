@@ -104,7 +104,16 @@ INIT → PREPARE → BASELINE → PROPOSE 🧠 → EXECUTE → EVALUATE → DECI
 
 - Falha de sandbox/operador: registra e segue.
 - Rede na CLI do Kaggle: retry com backoff; depois STOP com estado salvo.
-- Submissão rejeitada: lê o motivo (`kaggle competitions submission <ref>`), grava e interrompe o envio, sem retry cego.
+- Submissão rejeitada: o status final lido em `submissions` (`ERROR`/falha) é gravado e a execução para com o motivo `submission_rejected` (status e descrição impressos), sem retry cego; retomar a mesma execução não reenvia, é preciso uma nova execução.
+- O `submit` nunca é repetido às cegas: num erro transitório (5xx, timeout) o cliente consulta `submissions` pela mensagem; se ela aparece, conta como enviada; se não, devolve o erro transitório sem segundo upload (a retomada decide).
+
+### Comandos da CLI do Kaggle (`kaggle>=2.2,<3`)
+
+- `kaggle competitions download <c> -p <dest>`: grava `<dest>/<c>.zip` (a CLI 2.x não tem `--unzip`); o `kaggle_client` extrai o zip em `<dest>` recusando caminhos fora de `<dest>`. Repetido com backoff em erro transitório.
+- `kaggle competitions submit <c> -f <arquivo> -m <mensagem>`: chamado uma única vez (a CLI 2.x não tem `--wait`). Depois o cliente consulta `kaggle competitions submissions <c> -v` até a entrada com `description == mensagem` ter status final, com limite de tentativas (padrão 60 × 10 s). Status (`SubmissionStatus.COMPLETE`, `COMPLETE`, `ERROR`, `PENDING`...) é classificado sem diferenciar maiúsculas: contém "complete" → concluída; contém "error" ou "fail" → rejeitada; senão → pendente. Se ainda pendente ao fim das tentativas, a submissão fica `pending` e o MONITOR grava o percentil como nulo.
+- `kaggle competitions submissions <c> -v`: CSV lido por nome de coluna (`ref`, `description`, `status`, `publicScore`).
+- `kaggle competitions leaderboard <c> -d -p <dest>`: baixa o zip do leaderboard, extraído do mesmo modo seguro.
+- Cada chamada tem timeout (padrão 1800 s, configurável), saída lida em UTF-8 (`PYTHONIOENCODING=utf-8`, caracteres inválidos substituídos); timeout conta como erro transitório, exceto no `submit`, que passa pela consulta acima.
 
 ## 5. Estratégia de validação (pack S6E10)
 
@@ -121,7 +130,8 @@ INIT → PREPARE → BASELINE → PROPOSE 🧠 → EXECUTE → EVALUATE → DECI
 
 ## 6. Sandbox e segurança
 
-- Subprocesso `python -I` em diretório próprio (`runs/<run_id>/<exp_id>/`); dados em modo somente leitura.
+- Subprocesso `python -I` em diretório próprio; dados em modo somente leitura (na fase 1 isso não é imposto pelo sandbox, ver "Desvios" no plano).
+- Layout real dos artefatos (raiz = diretório atual): o operador roda com cwd `runs/<exp_id>/` (lá fica `operator_config.json`) e grava `oof.npy`, `test.npy` e `metrics.json` em `runs/<exp_id>/out/`; o orquestrador grava o manifesto do score em `runs/<run_id>/<exp_id>/score.json`, o CSV em `runs/<run_id>/submission/submission.csv` e o leaderboard em `runs/<run_id>/leaderboard/`; o banco é `runs/kagglers.db` e os dados ficam em `data/<competition>/` (com `folds_k{n}_s{seed}.npy`).
 - Limites de timeout, memória e CPU configuráveis no pack. No Windows, Job Objects (`psutil`/`pywin32`) limitam memória e matam a árvore de processos no timeout. O Windows não tem o isolamento do Linux; para código não confiável o ideal é Docker/WSL2, deixado como evolução.
 - Contrato: o operador recebe um JSON de config, lê os folds e devolve OOF e teste em `.npy`/`.parquet` mais um JSON de métricas. O sandbox valida o formato.
 - Sem rede no código de operador; download e submissão passam só pelo `kaggle_client`, no processo do orquestrador.
@@ -130,10 +140,10 @@ INIT → PREPARE → BASELINE → PROPOSE 🧠 → EXECUTE → EVALUATE → DECI
 
 ## 7. Memória de experimentos (SQLite)
 
-- `runs`: `run_id`, `competition`, `config_hash`, `state` (padrão `INIT`), início/fim, motivo de parada.
-- `experiments`: `exp_id`, `run_id`, `parent_id`, `hypothesis`, `operator`, `config_json`, `config_hash` (índice único), `status` (`ok`/`failed`/`timeout`), `cv_mean`, `cv_std`, `seeds`, `delta_vs_best`, `promoted`, `cost_usd`, `compute_s`.
+- `runs`: `run_id`, `competition`, `state` (último estado concluído, padrão `INIT`), início/fim, motivo de parada. (O esquema ainda tem uma coluna `config_hash` em `runs`, não usada.)
+- `experiments`: `exp_id`, `run_id`, `parent_id`, `hypothesis`, `operator`, `config_json`, `config_hash` (único por `(run_id, config_hash)`, regra R2), `status` (`running` ao começar; depois `ok`/`failed`/`timeout`), `cv_mean`, `cv_std`, `seeds`, `delta_vs_best`, `promoted`, `cost_usd`, `compute_s`.
 - `submissions`: `sub_id`, `exp_id`, `kaggle_ref`, `message`, `cv_at_submit`, `lb_public`, `status`, `submitted_at`.
-- `leaderboard_snapshots`: `ts`, `n_teams`, `our_score`, `percentil`.
+- `leaderboard_snapshots`: `run_id`, `ts`, `n_teams`, `our_score`, `percentil` (nulo quando o score público não está disponível).
 
 O PROPOSE recebe um resumo dessas tabelas (o que foi tentado, ganho de cada tentativa, falhas). MLflow fica de fora; o schema permite exportar depois.
 
@@ -143,11 +153,11 @@ O PROPOSE recebe um resumo dessas tabelas (o que foi tentado, ganho de cada tent
 
 **Pronto quando:**
 1. `kagglers run airline_s6e10 --phase1` baixa os dados, gera os folds, treina o baseline, imprime o AUC de CV e valida o CSV.
-2. A submissão sai com `--wait`, o `kaggle_ref` é gravado e o MONITOR grava o percentil.
+2. A submissão é enviada uma vez, o status é acompanhado por `submissions` até ficar final, o `kaggle_ref` é gravado e o MONITOR grava o percentil.
 3. Interromper no meio e rodar de novo retoma do estado salvo.
 
 **Testes (pytest, TDD):**
-- Unitários: `budget` (estouro de cada teto), `store` (unicidade de `config_hash`), validador de formato do CSV, percentil sobre CSV de leaderboard de exemplo, geração e estabilidade dos folds.
+- Unitários: `budget` (estouro de cada teto), `store` (unicidade de `(run_id, config_hash)`), validador de formato do CSV, percentil sobre CSV de leaderboard de exemplo, geração e estabilidade dos folds.
 - Integração sem rede: `kaggle_client` é uma interface com implementação real e um fake que lê arquivos locais; o fluxo completo roda contra o fake e um dataset sintético pequeno.
 - Sandbox: teste de timeout e de estouro de memória (processo morto, orquestrador continua).
 - A chamada real ao Kaggle é verificação manual.

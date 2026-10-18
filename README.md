@@ -7,12 +7,18 @@ one competition pack (`airline_s6e10`, Playground Series S6E10):
 INIT -> PREPARE -> BASELINE -> SUBMIT -> MONITOR -> STOP
 ```
 
-- **PREPARE** downloads the data, fixes 5 stratified folds and runs a quick
-  adversarial validation (warning if AUC > 0.6).
+- **PREPARE** downloads the data (`kaggle competitions download <c> -p <dir>`
+  writes `<c>.zip`, which is extracted safely into the data directory), fixes 5
+  stratified folds and runs a quick adversarial validation (warning if AUC > 0.6).
 - **BASELINE** trains LightGBM on the 5 folds in a sandboxed subprocess and records
   the CV ROC AUC.
-- **SUBMIT** builds and validates `submission.csv`, then submits it (one per run,
-  only if the daily quota allows).
+- **SUBMIT** builds and validates `submission.csv` (predictions matched to the
+  `sample_submission.csv` ids), then submits it once (one per run, only if the daily
+  quota allows) with `kaggle competitions submit <c> -f <csv> -m <message>`. The
+  upload is never retried blindly: after a transient error the client first looks
+  for the message in `kaggle competitions submissions`. It then polls
+  `submissions` until the status is final (default 60 polls x 10 s); a submission
+  still pending after that is kept as `pending` and MONITOR records no percentile.
 - **MONITOR** downloads the leaderboard and records the public-LB percentile. The
   public LB is metadata only; it never drives a decision.
 
@@ -21,7 +27,9 @@ interrupted run can be resumed without retraining or resubmitting.
 
 ## Install
 
-Python 3.12+.
+Python 3.12+. Kaggle CLI `kaggle>=2.2,<3` (installed as a dependency; 2.x has no
+`--unzip` / `--wait` flags, so the client unzips and polls itself). Each CLI call
+has a timeout (default 30 min).
 
 ```
 python -m venv .venv
@@ -61,9 +69,11 @@ kagglers run airline_s6e10 --phase1 [--resume RUN_ID] [--compute-minutes N] [--p
   the percentile and the stop reason. Exit code 0 only for `phase1_complete`.
 
 Stop reasons: `phase1_complete`, `quota_exhausted`, `evaluation_failed`,
-`compute_budget`, `rules_not_accepted`, `error: <ExceptionName>`. For anything other
-than `phase1_complete` (and `evaluation_failed`, which is final for that
-configuration) fix the cause and resume with the printed command:
+`submission_rejected`, `compute_budget`, `rules_not_accepted`,
+`error: <ExceptionName>`. `evaluation_failed` and `submission_rejected` (Kaggle
+scored the file as an error; its status and description are printed) are final for
+that run: the CLI says a new run is needed. For the others fix the cause and resume
+with the printed command:
 `kagglers run airline_s6e10 --phase1 --resume <run_id>`. Completed states are
 skipped; a submission already on Kaggle (matched by its message
 `kagglers <exp_id>`) is reconciled instead of being sent again.
