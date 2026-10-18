@@ -249,3 +249,9 @@ class Store:
                 "(run_id, ts, n_teams, our_score, percentil) VALUES (?, ?, ?, ?, ?)",
                 (run_id, _now().isoformat(), n_teams, our_score, percentile),
             )
+
+    def list_leaderboard_snapshots(self, run_id: str) -> list[dict]:
+        return self._conn.execute(
+            "SELECT * FROM leaderboard_snapshots WHERE run_id = ? ORDER BY rowid",
+            (run_id,),
+        ).fetchall()

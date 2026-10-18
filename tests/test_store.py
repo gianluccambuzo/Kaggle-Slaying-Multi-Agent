@@ -62,3 +62,17 @@ def test_count_submissions_today_counts_only_current_utc_day(tmp_path):
     assert len(subs) == 2
     assert {s["lb_public"] for s in subs} == {None, 0.88}
     store.add_leaderboard_snapshot(run_id, 100, 0.88, 0.5)
+
+
+def test_list_leaderboard_snapshots_returns_rows_for_run(tmp_path):
+    store = Store(tmp_path / "s.db")
+    run_id = store.create_run("comp")
+    other = store.create_run("comp")
+    store.add_leaderboard_snapshot(run_id, 100, 0.88, 12.0)
+    store.add_leaderboard_snapshot(run_id, 101, None, None)
+    store.add_leaderboard_snapshot(other, 5, 0.5, 80.0)
+    snaps = store.list_leaderboard_snapshots(run_id)
+    assert [(s["n_teams"], s["our_score"], s["percentil"]) for s in snaps] == [
+        (100, 0.88, 12.0),
+        (101, None, None),
+    ]
