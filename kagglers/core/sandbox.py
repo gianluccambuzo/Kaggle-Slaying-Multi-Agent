@@ -55,14 +55,20 @@ def _tree(proc: psutil.Process) -> list[psutil.Process]:
         return []
 
 
-def _kill_tree(proc: psutil.Process) -> None:
-    procs = _tree(proc)  # children first, parent last
+def _kill_procs(procs: list[psutil.Process]) -> None:
+    alive = []
     for p in procs:
         try:
-            p.kill()
-        except psutil.NoSuchProcess:
+            if p.is_running():  # False if the pid was reused by another process
+                p.kill()
+                alive.append(p)
+        except psutil.Error:
             pass
-    psutil.wait_procs(procs, timeout=5)
+    psutil.wait_procs(alive, timeout=5)
+
+
+def _kill_tree(proc: psutil.Process) -> None:
+    _kill_procs(_tree(proc))  # children first, parent last
 
 
 def _tree_rss_mb(proc: psutil.Process) -> float:
@@ -91,9 +97,20 @@ def run_in_sandbox(args: list[str], workdir: Path, limits: SandboxLimits) -> San
         ps = psutil.Process(popen.pid)
         verdict: list[str] = []
         done = threading.Event()
+        # Descendants seen while the child ran: once it exits they can no longer be
+        # found through it, and leftovers must not outlive the sandbox.
+        seen: dict[int, psutil.Process] = {}
+
+        def snapshot() -> None:
+            try:
+                for c in ps.children(recursive=True):
+                    seen.setdefault(c.pid, c)
+            except psutil.Error:
+                pass
 
         def monitor() -> None:
             while not done.wait(POLL_INTERVAL_S):
+                snapshot()
                 if time.monotonic() - start > limits.timeout_s:
                     verdict.append("timeout")
                 elif _tree_rss_mb(ps) > limits.memory_mb:
@@ -105,9 +122,20 @@ def run_in_sandbox(args: list[str], workdir: Path, limits: SandboxLimits) -> San
 
         t = threading.Thread(target=monitor, daemon=True)
         t.start()
-        popen.wait()
-        done.set()
-        t.join()
+        try:
+            popen.wait()
+        except BaseException:  # Ctrl+C or any abort: never leave the tree running
+            done.set()
+            t.join()
+            snapshot()
+            _kill_tree(ps)
+            _kill_procs(list(seen.values()))
+            popen.poll()
+            raise
+        finally:
+            done.set()
+            t.join()
+        _kill_procs(list(seen.values()))
         returncode = popen.returncode
         out_f.seek(0)
         err_f.seek(0)

@@ -92,3 +92,46 @@ def test_validate_operator_output_missing_metric_keys(tmp_path):
     with pytest.raises(SandboxOutputError) as exc:
         validate_operator_output(tmp_path)
     assert "cv_std" in str(exc.value)
+
+
+def _alive(pid):
+    try:
+        p = psutil.Process(pid)
+        return p.is_running() and p.status() != psutil.STATUS_ZOMBIE
+    except psutil.NoSuchProcess:
+        return False
+
+
+def _wait_dead(pids, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline and any(_alive(p) for p in pids):
+        time.sleep(0.1)
+    return [p for p in pids if _alive(p)]
+
+
+def test_base_exception_during_wait_kills_tree_and_reraises(tmp_path, monkeypatch):
+    import subprocess
+
+    started = []
+
+    class InterruptedPopen(subprocess.Popen):
+        def wait(self, timeout=None):
+            started.append(self.pid)
+            deadline = time.monotonic() + 15
+            while not (tmp_path / "pids.txt").exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            time.sleep(0.2)
+            raise KeyboardInterrupt  # what Ctrl+C does to the orchestrator
+
+    monkeypatch.setattr(subprocess, "Popen", InterruptedPopen)
+    with pytest.raises(KeyboardInterrupt):
+        run_in_sandbox([str(SCRIPTS / "sleep.py"), "spawn"], tmp_path, LIMITS)
+    child = int((tmp_path / "pids.txt").read_text().split()[0])
+    assert _wait_dead([started[0], child]) == []
+
+
+def test_background_child_is_killed_after_normal_exit(tmp_path):
+    res = run_in_sandbox([str(SCRIPTS / "orphan.py")], tmp_path, LIMITS)
+    assert res.status == "ok"
+    child = int((tmp_path / "pids.txt").read_text().split()[0])
+    assert _wait_dead([child]) == []
