@@ -1,9 +1,11 @@
 import subprocess
+import sys
 import zipfile
 from pathlib import Path
 
 import pytest
 
+from kagglers.core import kaggle_client
 from kagglers.core.kaggle_client import (
     CliKaggleClient,
     KaggleError,
@@ -227,3 +229,89 @@ def test_accept_competition_rules_raises_rules_single_call(tmp_path):
     with pytest.raises(KaggleRulesNotAccepted):
         CliKaggleClient(runner=r, sleep=lambda s: None).download("comp", tmp_path)
     assert len(r.calls) == 1
+
+
+def test_submit_transient_error_found_remotely_is_treated_as_submitted(tmp_path):
+    r = ScriptedRunner(
+        submit=[_result(1, err="502 Bad Gateway after upload")],
+        submissions=[_result(out=_subs(("9", "msg", "COMPLETE", 0.9)))],
+    )
+    CliKaggleClient(runner=r, sleep=lambda s: None).submit("comp", tmp_path / "s.csv", "msg")
+    assert r.count("submit") == 1
+
+
+def test_submit_transient_error_not_found_remotely_raises_without_second_upload(tmp_path):
+    r = ScriptedRunner(
+        submit=[_result(1, err="500 Internal Server Error"), _result()],
+        submissions=[_result(out=_subs(("9", "other", "COMPLETE", 0.9)))],
+    )
+    with pytest.raises(KaggleTransientError):
+        CliKaggleClient(runner=r, sleep=lambda s: None).submit("comp", tmp_path / "s.csv", "msg")
+    assert r.count("submit") == 1
+
+
+def test_submit_timeout_goes_through_remote_check(tmp_path):
+    r = ScriptedRunner(
+        submit=[subprocess.TimeoutExpired(["kaggle"], 1.0)],
+        submissions=[_result(out=_subs(("9", "msg", "COMPLETE", 0.9)))],
+    )
+    CliKaggleClient(runner=r, sleep=lambda s: None).submit("comp", tmp_path / "s.csv", "msg")
+    assert r.count("submit") == 1
+
+
+def test_submit_timeout_not_found_remotely_raises_transient(tmp_path):
+    r = ScriptedRunner(
+        submit=[subprocess.TimeoutExpired(["kaggle"], 1.0)],
+        submissions=[_result(out=SUBS_HEADER)],
+    )
+    with pytest.raises(KaggleTransientError):
+        CliKaggleClient(runner=r, sleep=lambda s: None).submit("comp", tmp_path / "s.csv", "msg")
+    assert r.count("submit") == 1
+
+
+def test_runner_timeout_is_transient_and_retried(tmp_path):
+    r = ScriptedRunner(download=[subprocess.TimeoutExpired(["kaggle"], 1.0)])
+    with pytest.raises(KaggleTransientError, match="timed out"):
+        CliKaggleClient(runner=r, max_retries=3, sleep=lambda s: None).download("comp", tmp_path)
+    assert r.count("download") == 3
+
+
+def test_default_runner_passes_timeout_and_utf8_settings(monkeypatch):
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen.update(kwargs)
+        return _result()
+
+    monkeypatch.setattr(kaggle_client.subprocess, "run", fake_run)
+    kaggle_client.default_runner(["kaggle", "x"], timeout_s=123.0)
+    assert seen["timeout"] == 123.0
+    assert seen["encoding"] == "utf-8"
+    assert seen["errors"] == "replace"
+    assert seen["env"]["PYTHONIOENCODING"] == "utf-8"
+    assert kaggle_client.DEFAULT_TIMEOUT_S >= 600
+
+
+def test_client_timeout_parameter_reaches_default_runner(monkeypatch, tmp_path):
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen.update(kwargs)
+        return _result(out=SUBS_HEADER)
+
+    monkeypatch.setattr(kaggle_client.subprocess, "run", fake_run)
+    CliKaggleClient(timeout_s=42.0).submissions("comp")
+    assert seen["timeout"] == 42.0
+
+
+def test_default_runner_raises_timeout_expired_on_real_subprocess():
+    with pytest.raises(subprocess.TimeoutExpired):
+        kaggle_client.default_runner([sys.executable, "-c", "import time; time.sleep(10)"],
+                                     timeout_s=0.5)
+
+
+def test_default_runner_decodes_utf8_output():
+    res = kaggle_client.default_runner(
+        [sys.executable, "-c", "import os; print(os.environ['PYTHONIOENCODING'], 'é✓')"]
+    )
+    assert res.stdout.strip() == "utf-8 é✓"

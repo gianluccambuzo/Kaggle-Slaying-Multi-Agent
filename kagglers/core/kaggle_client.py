@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import csv
+import functools
 import io
+import os
 import re
 import subprocess
 import time
@@ -41,8 +43,22 @@ class KaggleClient(Protocol):
     def leaderboard(self, competition: str, dest: Path) -> Path: ...
 
 
-def default_runner(cmd: list[str]) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, capture_output=True, text=True, check=False)
+DEFAULT_TIMEOUT_S = 1800.0  # generous: covers the data download on a slow link
+
+
+def default_runner(
+    cmd: list[str], timeout_s: float = DEFAULT_TIMEOUT_S
+) -> subprocess.CompletedProcess:
+    """Run the CLI; raises subprocess.TimeoutExpired after `timeout_s` (child killed)."""
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+        timeout=timeout_s,
+        check=False,
+    )
 
 
 _RULES = re.compile(r"\b403\b|accept.*rules|rules.*accept", re.I)
@@ -77,12 +93,15 @@ def _safe_extract(zip_path: Path, dest: Path) -> None:
 class CliKaggleClient:
     def __init__(
         self,
-        runner: Callable[[list[str]], subprocess.CompletedProcess] = default_runner,
+        runner: Callable[[list[str]], subprocess.CompletedProcess] | None = None,
         max_retries: int = 3,
         sleep: Callable[[float], None] = time.sleep,
         max_polls: int = DEFAULT_MAX_POLLS,
         poll_interval_s: float = DEFAULT_POLL_INTERVAL_S,
+        timeout_s: float = DEFAULT_TIMEOUT_S,
     ) -> None:
+        if runner is None:
+            runner = functools.partial(default_runner, timeout_s=timeout_s)
         self._runner = runner
         self._max_retries = max_retries
         self._sleep = sleep
@@ -90,7 +109,10 @@ class CliKaggleClient:
         self.poll_interval_s = poll_interval_s
 
     def _run_once(self, args: list[str]) -> str:
-        res = self._runner(["kaggle", *args])
+        try:
+            res = self._runner(["kaggle", *args])
+        except subprocess.TimeoutExpired as exc:
+            raise KaggleTransientError(f"kaggle {args[:2]} timed out after {exc.timeout}s") from exc
         if res.returncode == 0:
             return res.stdout or ""
         text = f"{res.stdout or ''}\n{res.stderr or ''}".strip()
@@ -123,15 +145,26 @@ class CliKaggleClient:
     def submit(self, competition: str, file: Path, message: str) -> None:
         """Upload once (never retried: a retry could double-submit), then poll
         `submissions()` until the entry with description == message is terminal or
-        `max_polls` is reached; a still-pending entry is left to the caller."""
-        self._run_once(["competitions", "submit", competition, "-f", str(file), "-m", message])
+        `max_polls` is reached; a still-pending entry is left to the caller.
+
+        On a transient error (5xx, timeout, ...) the upload may still have landed, so
+        the remote list is checked: found -> treated as submitted; not found ->
+        KaggleTransientError, without a second upload (the run's resume handles it)."""
+        try:
+            self._run_once(
+                ["competitions", "submit", competition, "-f", str(file), "-m", message]
+            )
+        except KaggleTransientError:
+            if self._find(competition, message) is None:
+                raise
         self._wait_for_status(competition, message)
+
+    def _find(self, competition: str, message: str) -> SubmissionInfo | None:
+        return next((s for s in self.submissions(competition) if s.description == message), None)
 
     def _wait_for_status(self, competition: str, message: str) -> None:
         for poll in range(self.max_polls):
-            info = next(
-                (s for s in self.submissions(competition) if s.description == message), None
-            )
+            info = self._find(competition, message)
             if info is not None and classify_status(info.status) != "pending":
                 return
             if poll < self.max_polls - 1:
