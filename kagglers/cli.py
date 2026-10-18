@@ -15,6 +15,8 @@ from kagglers.packs import UnknownPackError, get_pack
 DEFAULT_COMPUTE_MINUTES = 120.0
 # Phase 1 never calls an LLM; the cap only has to be > 0 so Budget.exhausted() stays quiet.
 PHASE1_LLM_USD = 1.0
+# Stop reasons that a resume of the same run cannot change.
+FINAL_STOP_REASONS = ("evaluation_failed", "submission_rejected")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -106,11 +108,19 @@ def _report(orch: Orchestrator, store: Store, run_id: str) -> int:
     if snaps:
         pct = snaps[-1]["percentil"]
         print("percentile: n/a" if pct is None else f"percentile: top {pct:.1f}%")
-    print(f"stop_reason: {run['stop_reason']}")
-    if run["stop_reason"] != "phase1_complete":
+    reason = run["stop_reason"]
+    print(f"stop_reason: {reason}")
+    if reason == "phase1_complete":
+        return 0
+    if reason == "submission_rejected" and subs:
+        s = subs[-1]
+        print(f"submission rejected by Kaggle (status {s['status']}, "
+              f"description {s['message']!r}, ref {s['kaggle_ref']})")
+    if reason in FINAL_STOP_REASONS:
+        print(f"resuming will not help; a new run is needed: kagglers run {orch.pack.name} --phase1")
+    else:
         print(f"resume with: kagglers run {orch.pack.name} --phase1 --resume {run_id}")
-        return 1
-    return 0
+    return 1
 
 
 if __name__ == "__main__":

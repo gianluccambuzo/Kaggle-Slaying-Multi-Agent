@@ -311,3 +311,29 @@ def test_crash_during_baseline_is_resumable_and_reuses_exp_id(synthetic_comp, tm
     assert exp2["exp_id"] == exp["exp_id"]
     assert exp2["status"] == "ok"
     assert store2.list_submissions(run_id)[0]["message"] == f"kagglers {exp['exp_id']}"
+
+
+def test_rejected_submission_stops_with_submission_rejected(synthetic_comp, tmp_path, caplog):
+    pack = _pack(tmp_path)
+    kaggle = FakeKaggleClient(fixture_dir=synthetic_comp, submission_status="error")
+    orch, store = _orch(pack, tmp_path, kaggle)
+
+    with caplog.at_level("ERROR", logger="kagglers.orchestrator"):
+        run_id = orch.run()
+
+    run = store.get_run(run_id)
+    assert run["stop_reason"] == "submission_rejected"
+    assert run["finished_at"] is not None
+    (sub,) = store.list_submissions(run_id)
+    assert sub["status"] == "error"
+    assert sub["lb_public"] is None
+    assert store.list_leaderboard_snapshots(run_id) == []
+    assert kaggle.leaderboard_calls == 0
+    msgs = " ".join(r.getMessage() for r in caplog.records)
+    assert "rejected" in msgs and "error" in msgs and sub["message"] in msgs
+
+    # Resuming never re-sends it and keeps the same verdict.
+    orch.run(run_id)
+    assert store.get_run(run_id)["stop_reason"] == "submission_rejected"
+    assert len(kaggle.submitted) == 1
+    assert kaggle.leaderboard_calls == 0

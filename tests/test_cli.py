@@ -1,4 +1,5 @@
 from kagglers.cli import main
+from kagglers.core.sandbox import SandboxLimits
 from kagglers.core.store import Store
 from tests.fakes import FakeKaggleClient
 
@@ -66,3 +67,29 @@ def test_cli_requires_phase1_flag(tmp_path, capsys):
     code = main(["run", "airline_s6e10"], kaggle=FakeKaggleClient(), base_dir=tmp_path)
     assert code != 0
     assert "--phase1" in capsys.readouterr().err
+
+
+def test_cli_rejected_submission_exits_nonzero_and_asks_for_new_run(synthetic_comp, tmp_path,
+                                                                    capsys):
+    kaggle = FakeKaggleClient(fixture_dir=synthetic_comp, submission_status="error")
+    code = main(["run", "airline_s6e10", "--phase1"], kaggle=kaggle,
+                base_dir=tmp_path / "base", pack_kwargs=PACK_KWARGS)
+    out = capsys.readouterr().out
+    assert code != 0
+    assert "stop_reason: submission_rejected" in out
+    assert "rejected by Kaggle (status error" in out
+    assert "kagglers " in out  # the submission message/description is shown
+    assert "resume with" not in out
+    assert "new run is needed" in out
+
+
+def test_cli_evaluation_failed_does_not_suggest_resume(synthetic_comp, tmp_path, capsys):
+    kwargs = {**PACK_KWARGS, "limits": SandboxLimits(timeout_s=0.01, memory_mb=4000,
+                                                     cpu_threads=1)}
+    code = main(["run", "airline_s6e10", "--phase1"], kaggle=FakeKaggleClient(
+        fixture_dir=synthetic_comp), base_dir=tmp_path / "base", pack_kwargs=kwargs)
+    out = capsys.readouterr().out
+    assert code != 0
+    assert "stop_reason: evaluation_failed" in out
+    assert "resume with" not in out
+    assert "new run is needed" in out

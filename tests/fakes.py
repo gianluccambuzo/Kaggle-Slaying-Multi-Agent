@@ -20,6 +20,7 @@ class FakeKaggleClient:
         fail_submit_after_success: bool = False,
         fail_leaderboard_once: bool = False,
         rules_not_accepted: bool = False,
+        submission_status: str = "complete",
     ) -> None:
         self.fixture_dir = fixture_dir
         self.leaderboard_scores = leaderboard_scores if leaderboard_scores is not None else [
@@ -29,6 +30,9 @@ class FakeKaggleClient:
         self.fail_submit_after_success = fail_submit_after_success
         self.fail_leaderboard_once = fail_leaderboard_once
         self.rules_not_accepted = rules_not_accepted
+        # Terminal status Kaggle reports for every submission ("complete" or "error");
+        # like CliKaggleClient.submit, the status is final when submit() returns.
+        self.submission_status = submission_status
         self.submitted: list[tuple[str, Path, str, str]] = []
         self.leaderboard_calls = 0
 
@@ -49,8 +53,9 @@ class FakeKaggleClient:
             raise KaggleError("crash after CLI success")
 
     def submissions(self, competition: str) -> list[SubmissionInfo]:
+        score = self.public_score if self.submission_status == "complete" else None
         return [
-            SubmissionInfo(ref, msg, "complete", self.public_score)
+            SubmissionInfo(ref, msg, self.submission_status, score)
             for comp, _f, msg, ref in self.submitted
             if comp == competition
         ]

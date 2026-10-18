@@ -17,7 +17,12 @@ from typing import Callable
 import pandas as pd
 
 from kagglers.core.budget import Budget
-from kagglers.core.kaggle_client import KaggleClient, KaggleError, KaggleRulesNotAccepted
+from kagglers.core.kaggle_client import (
+    KaggleClient,
+    KaggleError,
+    KaggleRulesNotAccepted,
+    classify_status,
+)
 from kagglers.core.leaderboard import top_percent
 from kagglers.core.sandbox import SandboxOutputError
 from kagglers.core.store import Store
@@ -199,12 +204,13 @@ class Orchestrator:
         comp = self.pack.competition
 
         if any(s["message"] == message for s in self.store.list_submissions(run_id)):
-            self._refresh_submission(run_id, message)
+            self._stop_if_rejected(self._refresh_submission(run_id, message))
             return
         remote = self._find_remote(message)
         if remote is not None:  # submitted before a crash, never recorded (Review Focus 5)
             log.warning("submission %r already on Kaggle (ref %s); reconciling", message, remote.ref)
             self._record_submission(exp_id, remote, message, score.value)
+            self._stop_if_rejected(self._submission_row(run_id, message))
             return
 
         today = self.store.count_submissions_today(comp, self.now())
@@ -215,6 +221,7 @@ class Orchestrator:
         if remote is None:
             raise KaggleError(f"submission {message!r} accepted but not listed by Kaggle")
         self._record_submission(exp_id, remote, message, score.value)
+        self._stop_if_rejected(self._submission_row(run_id, message))
 
     def _monitor(self, run_id: str) -> None:
         subs = self.store.list_submissions(run_id)
@@ -223,6 +230,7 @@ class Orchestrator:
         sub = subs[-1]
         if sub["lb_public"] is None:
             sub = self._refresh_submission(run_id, sub["message"]) or sub
+        self._stop_if_rejected(sub)
         lb_csv = self.kaggle.leaderboard(self.pack.competition, self.run_dir(run_id) / "leaderboard")
         n_teams = len(pd.read_csv(lb_csv))
         our = sub["lb_public"]
@@ -247,13 +255,26 @@ class Orchestrator:
         sub_id = self.store.add_submission(exp_id, info.ref, message, cv, submitted_at=self.now())
         self.store.update_submission(sub_id, status=info.status, lb_public=info.public_score)
 
-    def _refresh_submission(self, run_id: str, message: str) -> dict | None:
-        row = next(s for s in self.store.list_submissions(run_id) if s["message"] == message)
+    def _submission_row(self, run_id: str, message: str) -> dict:
+        return next(s for s in self.store.list_submissions(run_id) if s["message"] == message)
+
+    def _refresh_submission(self, run_id: str, message: str) -> dict:
+        row = self._submission_row(run_id, message)
         info = self._find_remote(message)
         if info is None:
             return row
         self.store.update_submission(row["sub_id"], status=info.status, lb_public=info.public_score)
-        return next(s for s in self.store.list_submissions(run_id) if s["message"] == message)
+        return self._submission_row(run_id, message)
+
+    @staticmethod
+    def _stop_if_rejected(sub: dict) -> None:
+        """A submission Kaggle scored as error/failed ends the run (never resent)."""
+        if classify_status(sub["status"] or "") == "error":
+            log.error(
+                "submission %r (ref %s) rejected by Kaggle: status %s",
+                sub["message"], sub["kaggle_ref"], sub["status"],
+            )
+            raise _Stop("submission_rejected")
 
     def _save_score(self, run_id: str, exp_id: str, score: Score) -> None:
         path = self._manifest_path(run_id, exp_id)
