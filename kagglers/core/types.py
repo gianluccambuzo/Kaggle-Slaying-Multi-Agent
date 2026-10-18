@@ -41,6 +41,15 @@ class Score:
     test_path: Path
 
 
+class EvaluationFailed(Exception):
+    """An Evaluator could not produce a Score (operator failed, timed out, bad output)."""
+
+    def __init__(self, status: str, stderr: str):
+        super().__init__(f"evaluation failed ({status}): {stderr[-2000:]}")
+        self.status = status
+        self.stderr = stderr
+
+
 @dataclass(frozen=True)
 class Artifact:
     path: Path

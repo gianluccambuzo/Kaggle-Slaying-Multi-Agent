@@ -6,18 +6,13 @@ from pathlib import Path
 import numpy as np
 
 from kagglers.core.sandbox import SandboxLimits, run_in_sandbox, validate_operator_output
-from kagglers.core.types import Candidate, Score
+from kagglers.core.types import Candidate, EvaluationFailed, Score
 from kagglers.packs.airline_s6e10.config import AirlineConfig
 from kagglers.packs.airline_s6e10.data import load_train_test, read_schema
 
 OPERATOR_MODULE = "kagglers.packs.airline_s6e10.baseline_operator"
 
-
-class EvaluationFailed(Exception):
-    def __init__(self, status: str, stderr: str):
-        super().__init__(f"evaluation failed ({status}): {stderr[-2000:]}")
-        self.status = status
-        self.stderr = stderr
+__all__ = ["AirlineEvaluator", "EvaluationFailed", "OPERATOR_MODULE"]
 
 
 class AirlineEvaluator:
