@@ -130,7 +130,7 @@ INIT → PREPARE → BASELINE → PROPOSE 🧠 → EXECUTE → EVALUATE → DECI
 
 ## 7. Memória de experimentos (SQLite)
 
-- `runs`: `run_id`, `competition`, `config_hash`, início/fim, motivo de parada.
+- `runs`: `run_id`, `competition`, `config_hash`, `state` (padrão `INIT`), início/fim, motivo de parada.
 - `experiments`: `exp_id`, `run_id`, `parent_id`, `hypothesis`, `operator`, `config_json`, `config_hash` (índice único), `status` (`ok`/`failed`/`timeout`), `cv_mean`, `cv_std`, `seeds`, `delta_vs_best`, `promoted`, `cost_usd`, `compute_s`.
 - `submissions`: `sub_id`, `exp_id`, `kaggle_ref`, `message`, `cv_at_submit`, `lb_public`, `status`, `submitted_at`.
 - `leaderboard_snapshots`: `ts`, `n_teams`, `our_score`, `percentil`.
