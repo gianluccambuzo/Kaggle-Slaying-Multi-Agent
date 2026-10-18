@@ -18,13 +18,13 @@ class UnknownPackError(KeyError):
 
 
 def _airline_s6e10(workdir: Path = Path("."), limits=None, **config_kwargs) -> Pack:
+    from kagglers.packs import airline_s6e10
     from kagglers.packs.airline_s6e10.config import AirlineConfig
-    from kagglers.packs.airline_s6e10.pack import DEFAULT_LIMITS, AirlinePack
 
     workdir = Path(workdir)
     # The default data_dir is relative ("data/<competition>"): anchor it at workdir.
     config_kwargs.setdefault("data_dir", workdir / AirlineConfig.data_dir)
-    return AirlinePack(AirlineConfig(**config_kwargs), workdir, limits or DEFAULT_LIMITS)
+    return airline_s6e10.build_pack(AirlineConfig(**config_kwargs), workdir, limits)
 
 
 _REGISTRY: dict[str, Callable[..., Pack]] = {"airline_s6e10": _airline_s6e10}

@@ -16,3 +16,27 @@ def test_prepare_writes_folds_file_and_sets_adversarial_auc(synthetic_comp, tmp_
     assert pack.name == "airline_s6e10"
     assert pack.baseline_params["seeds"] == [0]
     assert pack.baseline_params["lgbm"]["verbosity"] == -1
+
+
+def test_get_pack_delegates_to_build_pack(tmp_path, monkeypatch):
+    import kagglers.packs.airline_s6e10 as airline
+    from kagglers.core.sandbox import SandboxLimits
+    from kagglers.packs import get_pack
+
+    calls = []
+    real = airline.build_pack
+
+    def spy(config, workdir, limits=None):
+        calls.append((config, workdir, limits))
+        return real(config, workdir, limits)
+
+    monkeypatch.setattr(airline, "build_pack", spy)
+    limits = SandboxLimits(timeout_s=5, memory_mb=100, cpu_threads=1)
+    pack = get_pack("airline_s6e10", workdir=tmp_path, positive_label="satisfied", limits=limits)
+
+    (config, workdir, got_limits) = calls[0]
+    assert workdir == tmp_path and got_limits is limits
+    assert config.positive_label == "satisfied"
+    assert pack.data_dir == tmp_path / "data" / "playground-series-s6e10"
+    assert pack.evaluator.limits is limits
+    assert not hasattr(airline, "PACKS")
