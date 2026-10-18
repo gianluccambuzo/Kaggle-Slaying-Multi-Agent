@@ -108,3 +108,19 @@ def test_to_model_frame_handles_unseen_categories_and_nulls(synthetic_comp):
     assert mte["travel_class"].isna().sum() == 0
     assert mte["distance"].isna().sum() == 10
     assert mte["customer_type"].isna().sum() == 5
+
+
+def test_encode_target_positive_label_not_in_labels_raises_listing_values():
+    y = pd.Series(["satisfied", "neutral or dissatisfied"])
+    with pytest.raises(ValueError) as exc:
+        encode_target(y, "satisfid")
+    assert "satisfied" in str(exc.value) and "neutral or dissatisfied" in str(exc.value)
+    with pytest.raises(ValueError, match="not found"):
+        encode_target(pd.Series([0, 1, 1]), 2)
+
+
+def test_encode_target_nan_labels_raise():
+    with pytest.raises(ValueError, match="missing"):
+        encode_target(pd.Series(["satisfied", None, "neutral"]), "satisfied")
+    with pytest.raises(ValueError, match="missing"):
+        encode_target(pd.Series([0.0, 1.0, np.nan]), None)

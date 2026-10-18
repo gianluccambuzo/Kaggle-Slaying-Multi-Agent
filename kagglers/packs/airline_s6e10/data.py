@@ -43,13 +43,18 @@ def load_train_test(data_dir: Path, schema: Schema) -> tuple[pd.DataFrame, pd.Da
 
 
 def encode_target(y: pd.Series, positive_label: str | int | None) -> np.ndarray:
+    if y.isna().any():
+        raise ValueError(f"target contains {int(y.isna().sum())} missing (NaN) labels")
+    uniques = sorted(y.unique().tolist(), key=str)
     if positive_label is None:
-        uniques = set(y.dropna().unique().tolist())
-        if uniques <= {0, 1}:
+        if set(uniques) <= {0, 1}:
             return y.to_numpy().astype(int)
         raise ValueError(
-            f"positive_label is required for non-binary-numeric target; unique values: "
-            f"{sorted(uniques, key=str)}"
+            f"positive_label is required for non-binary-numeric target; unique values: {uniques}"
+        )
+    if positive_label not in set(uniques):
+        raise ValueError(
+            f"positive_label {positive_label!r} not found in target; unique values: {uniques}"
         )
     return (y == positive_label).to_numpy().astype(int)
 
