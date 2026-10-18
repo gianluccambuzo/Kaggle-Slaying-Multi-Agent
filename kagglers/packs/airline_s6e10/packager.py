@@ -42,14 +42,27 @@ class AirlinePackager:
     def build(self, score: Score, out_dir: Path) -> Artifact:
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
-        sample = pd.read_csv(Path(self.config.data_dir) / "sample_submission.csv")
+        data_dir = Path(self.config.data_dir)
+        sample = pd.read_csv(data_dir / "sample_submission.csv")
+        id_col, target_col = sample.columns[0], sample.columns[1]
+        # Predictions follow test.csv row order; match them to sample ids by id.
+        test_ids = pd.read_csv(data_dir / "test.csv", usecols=[id_col])[id_col]
         pred = np.load(score.test_path)
-        if pred.shape != (len(sample),):
+        if pred.shape != (len(test_ids),):
             raise SubmissionFormatError(
-                f"wrong row count: predictions {pred.shape} vs sample {len(sample)}"
+                f"wrong row count: predictions {pred.shape} vs test.csv {len(test_ids)}"
             )
-        sub = sample.copy()
-        sub[sample.columns[1]] = pred
+        if test_ids.duplicated().any():
+            raise SubmissionFormatError("duplicate ids in test.csv")
+        if sample[id_col].duplicated().any():
+            raise SubmissionFormatError("duplicate ids in sample_submission.csv")
+        missing = set(sample[id_col]) - set(test_ids)
+        if missing:
+            raise SubmissionFormatError(f"sample ids missing from test.csv ({len(missing)})")
+        by_id = pd.Series(pred, index=test_ids.to_numpy())
+        sub = pd.DataFrame(
+            {id_col: sample[id_col], target_col: by_id.reindex(sample[id_col]).to_numpy()}
+        )
         validate_submission(sub, sample)
         path = out_dir / "submission.csv"
         sub.to_csv(path, index=False)

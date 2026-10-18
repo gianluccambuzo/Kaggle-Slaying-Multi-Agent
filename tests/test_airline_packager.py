@@ -84,3 +84,41 @@ def test_validate_submission_rejects_out_of_range(sample):
     df.loc[0, "satisfaction"] = 1.5
     with pytest.raises(SubmissionFormatError, match="range"):
         validate_submission(df, sample)
+
+
+def _score_for(tmp_path, pred):
+    np.save(tmp_path / "test.npy", pred)
+    return Score(0.9, 0.0, 5, [0.9] * 5, tmp_path / "oof.npy", tmp_path / "test.npy")
+
+
+def test_build_follows_sample_order_when_sample_is_shuffled_vs_test(synthetic_comp, tmp_path):
+    test = pd.read_csv(synthetic_comp / "test.csv")
+    sample = pd.read_csv(synthetic_comp / "sample_submission.csv")
+    shuffled = sample.sample(frac=1.0, random_state=7).reset_index(drop=True)
+    assert shuffled["id"].tolist() != test["id"].tolist()
+    shuffled.to_csv(synthetic_comp / "sample_submission.csv", index=False)
+    pred = (test["id"].to_numpy() - 600) / 1000.0  # test.csv order, unique per id
+    cfg = AirlineConfig(data_dir=synthetic_comp, positive_label="satisfied")
+
+    sub = pd.read_csv(AirlinePackager(cfg).build(_score_for(tmp_path, pred), tmp_path / "o").path)
+
+    assert sub["id"].tolist() == shuffled["id"].tolist()
+    assert np.allclose(sub["satisfaction"], (sub["id"] - 600) / 1000.0)
+
+
+def test_build_rejects_sample_id_missing_from_test(synthetic_comp, tmp_path):
+    sample = pd.read_csv(synthetic_comp / "sample_submission.csv")
+    sample.loc[0, "id"] = 99999
+    sample.to_csv(synthetic_comp / "sample_submission.csv", index=False)
+    cfg = AirlineConfig(data_dir=synthetic_comp, positive_label="satisfied")
+    with pytest.raises(SubmissionFormatError, match="missing"):
+        AirlinePackager(cfg).build(_score_for(tmp_path, np.full(200, 0.5)), tmp_path / "o")
+
+
+def test_build_rejects_duplicate_test_ids(synthetic_comp, tmp_path):
+    test = pd.read_csv(synthetic_comp / "test.csv")
+    test.loc[1, "id"] = test.loc[0, "id"]
+    test.to_csv(synthetic_comp / "test.csv", index=False)
+    cfg = AirlineConfig(data_dir=synthetic_comp, positive_label="satisfied")
+    with pytest.raises(SubmissionFormatError, match="duplicate"):
+        AirlinePackager(cfg).build(_score_for(tmp_path, np.full(200, 0.5)), tmp_path / "o")
