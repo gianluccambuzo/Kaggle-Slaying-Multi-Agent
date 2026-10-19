@@ -101,4 +101,4 @@ Requires the token and accepted rules (see above). Not run by the test suite.
 
 | Date | CV AUC (mean ± std) | Public LB | Percentile | kaggle_ref |
 |------|---------------------|-----------|------------|------------|
-| _pending_ | | | | |
+| 2026-10-19 | 0.95868 ± 0.00064 | 0.95832 | top 65.8% (2299 teams) | 57381215 |
